@@ -64,10 +64,17 @@
   .doctor-name { font-family: 'DM Serif Display', serif; font-size: 19px; line-height: 1.2; }
   .doctor-affil { font-size: 13px; color: var(--muted); margin-top: 3px; }
 
-  .stat-grid { display: flex; gap: 10px; margin-top: 4px; }
-  .stat-card { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
+  .stat-grid { display: flex; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
+  .stat-card { flex: 1; min-width: 80px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
   .stat-card-val { font-size: 20px; font-weight: 500; color: var(--text); line-height: 1.2; }
   .stat-card-lbl { font-size: 11px; color: var(--muted); margin-top: 2px; display: flex; align-items: center; gap: 4px; }
+
+  .hospital-box { margin-top: 12px; background: var(--tag-bg); border-radius: 10px; padding: 12px 14px; font-size: 12px; }
+  .hospital-box-title { font-weight: 500; font-size: 12px; color: var(--text); margin-bottom: 6px; }
+  .hospital-stats { display: flex; gap: 16px; flex-wrap: wrap; }
+  .hospital-stat { display: flex; flex-direction: column; gap: 1px; }
+  .hospital-stat-val { font-size: 13px; font-weight: 500; color: var(--accent); }
+  .hospital-stat-lbl { font-size: 10px; color: var(--muted); }
 
   .info-btn { width: 14px; height: 14px; border-radius: 50%; background: var(--border); color: var(--muted); font-size: 9px; font-weight: 500; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; border: none; font-family: 'DM Sans', sans-serif; flex-shrink: 0; position: relative; }
   .info-btn:hover .tooltip { display: block; }
@@ -82,7 +89,7 @@
   .paper-item:last-child { border-bottom: none; }
   .paper-title { color: var(--text); text-decoration: none; font-weight: 500; }
   .paper-title:hover { color: var(--accent); }
-  .paper-meta { font-size: 11px; color: var(--muted); margin-top: 3px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .paper-meta { font-size: 11px; color: var(--muted); margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; }
   .paper-cite { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--accent-light); color: var(--accent); }
 </style>
 </head>
@@ -113,6 +120,9 @@
 <div class="results-section" id="resultsSection" style="display:none"></div>
 
 <script>
+// ── 심평원 API 키 (여기에 넣어줘) ──────────────────────
+const HIRA_API_KEY = 'bd60a013eefc4be6e550ed90b50f29ddb098ac3b148f6d6f91c7a2a5ec314b8a';
+
 const TERM_MAP = {
   '위암':'gastric cancer','췌장암':'pancreatic cancer','폐암':'lung cancer',
   '간암':'hepatocellular carcinoma','백혈병':'leukemia','뇌종양':'brain tumor',
@@ -120,6 +130,18 @@ const TERM_MAP = {
   '갑상선암':'thyroid cancer','글리벡':'imatinib','허셉틴':'trastuzumab',
   '담낭암':'gallbladder cancer','식도암':'esophageal cancer','방광암':'bladder cancer',
   '신장암':'renal cell carcinoma','자궁경부암':'cervical cancer','난소암':'ovarian cancer',
+};
+
+// 병명 → 심평원 진료과목 코드 매핑
+const DEPT_MAP = {
+  '위암':'03','췌장암':'03','간암':'03','대장암':'03','식도암':'03', // 외과
+  '폐암':'10', // 흉부외과
+  '백혈병':'15','뇌종양':'11', // 혈액종양내과, 신경외과
+  '유방암':'21', // 유방외과
+  '전립선암':'22', // 비뇨의학과
+  '갑상선암':'03',
+  '난소암':'18','자궁경부암':'18', // 산부인과
+  '담낭암':'03','방광암':'22','신장암':'22',
 };
 
 const KR_KEYWORDS = [
@@ -163,6 +185,22 @@ const HOSPITAL_MAP = [
   ['Dankook','단국대학교병원'],['KAIST','KAIST'],['POSTECH','POSTECH'],
 ];
 
+// 심평원 병원명 → 영문 병원명 역매핑
+const HOSPITAL_REVERSE = {
+  '삼성서울병원':'Samsung Medical',
+  '서울아산병원':'Asan Medical',
+  '세브란스병원':'Severance',
+  '분당서울대병원':'Seoul National University Bundang',
+  '서울대학교병원':'Seoul National University Hospital',
+  '국립암센터':'National Cancer Center',
+  '연세대학교':'Yonsei',
+  '고려대학교':'Korea University',
+  '한양대학교병원':'Hanyang',
+  '아주대학교병원':'Ajou',
+  '가천대길병원':'Gachon',
+  '인하대학교병원':'Inha',
+};
+
 function extractHospital(s) {
   if (!s) return '';
   for (const [k,v] of HOSPITAL_MAP) if (s.includes(k)) return v;
@@ -191,14 +229,12 @@ async function doSearch() {
   setStep('PubMed에서 한국 의사 검색 중...');
 
   try {
-    // Step 1: PubMed
     const doctors = await fetchPubmed(query);
     if (!Object.keys(doctors).length) {
       section.innerHTML = `<div class="no-results">한국 소속 연구자를 찾지 못했습니다.<br>다른 검색어를 시도해보세요.</div>`;
       return;
     }
 
-    // PMID + DOI 수집
     const pmids = [], doiMap = {};
     for (const doc of Object.values(doctors)) {
       doc.papers.forEach(p => {
@@ -207,37 +243,32 @@ async function doSearch() {
       });
     }
 
-    // Step 2: Europe PMC (PMID 기반 피인용수 - 가장 신뢰도 높음)
-    setStep('Europe PMC에서 피인용수 확인 중...');
-    const europePmcCites = await fetchEuropePMC(pmids);
+    setStep('피인용수 확인 중...');
+    const [europePmcCites, crossrefCites, openCites] = await Promise.all([
+      fetchEuropePMC(pmids),
+      fetchCrossRef(Object.keys(doiMap)),
+      fetchOpenCitations(pmids),
+    ]);
 
-    // Step 3: CrossRef (DOI 기반 피인용수)
-    setStep('CrossRef에서 피인용수 보강 중...');
-    const crossrefCites = await fetchCrossRef(Object.keys(doiMap));
-
-    // Step 4: OpenCitations (추가 보강)
-    setStep('OpenCitations에서 피인용수 보강 중...');
-    const openCites = await fetchOpenCitations(pmids);
-
-    // 피인용수 합산 (소스별 최대값 사용 - 중복 방지)
     for (const doc of Object.values(doctors)) {
       doc.papers.forEach(p => {
-        const byEpmc = europePmcCites[p.pmid] || 0;
-        const byCrossref = p.doi ? (crossrefCites[p.doi] || 0) : 0;
-        const byOpen = openCites[p.pmid] || 0;
-        // 가장 높은 값 사용 (각 소스가 다른 논문을 커버할 수 있음)
-        p.citationCount = Math.max(byEpmc, byCrossref, byOpen);
-        doc.citationCount += p.citationCount;
+        const c = Math.max(
+          europePmcCites[p.pmid]||0,
+          p.doi?(crossrefCites[p.doi]||0):0,
+          openCites[p.pmid]||0
+        );
+        p.citationCount = c;
+        doc.citationCount += c;
       });
     }
 
+    // 심평원 병원 정보
+    setStep('병원 정보 확인 중...');
+    const deptCode = DEPT_MAP[raw] || '';
+    const hospitalInfoMap = await fetchHiraHospitals(doctors, deptCode);
+
     const ranked = rankDoctors(doctors);
-    const sources = {
-      epmc: Object.keys(europePmcCites).length > 0,
-      crossref: Object.keys(crossrefCites).length > 0,
-      opencitations: Object.keys(openCites).length > 0,
-    };
-    renderResults(ranked, raw, sources);
+    renderResults(ranked, raw, hospitalInfoMap);
   } catch(e) {
     console.error(e);
     section.innerHTML = `<div class="error-box">데이터를 불러오는 중 오류가 발생했습니다.<br>잠시 후 다시 시도해주세요.</div>`;
@@ -265,11 +296,8 @@ async function fetchPubmed(query) {
     const yearEl = article.querySelector('PubDate Year')||article.querySelector('PubDate MedlineDate');
     const year = parseInt(yearEl?.textContent?.slice(0,4)||'0');
     const journal = article.querySelector('Journal Title')?.textContent||article.querySelector('ISOAbbreviation')?.textContent||'';
-    // DOI 추출
     let doi = '';
-    article.querySelectorAll('ArticleId').forEach(id => {
-      if (id.getAttribute('IdType') === 'doi') doi = id.textContent;
-    });
+    article.querySelectorAll('ArticleId').forEach(id => { if (id.getAttribute('IdType')==='doi') doi=id.textContent; });
     const allAffils = [...article.querySelectorAll('AffiliationInfo Affiliation')].map(a=>a.textContent);
 
     article.querySelectorAll('Author').forEach(author => {
@@ -281,7 +309,8 @@ async function fetchPubmed(query) {
       if (!isKorean(affil)) return;
 
       const name = `${lastName} ${foreName}`.trim();
-      if (!map[name]) map[name] = { name, affil: extractHospital(affil), papers:[], paperCount:0, recentScore:0, citationCount:0 };
+      const hospitalKr = extractHospital(affil);
+      if (!map[name]) map[name] = { name, affil: hospitalKr, affilRaw: affil, papers:[], paperCount:0, recentScore:0, citationCount:0 };
       if (!map[name].papers.find(p=>p.pmid===pmid)) {
         map[name].papers.push({ title, pmid, doi, year, journal, url:`https://pubmed.ncbi.nlm.nih.gov/${pmid}/`, citationCount:0 });
         map[name].paperCount++;
@@ -296,22 +325,15 @@ async function fetchPubmed(query) {
 async function fetchEuropePMC(pmids) {
   const result = {};
   if (!pmids.length) return result;
-  // 배치 20개씩
   const batchSize = 20;
-  for (let i = 0; i < pmids.length; i += batchSize) {
-    const batch = pmids.slice(i, i+batchSize);
+  for (let i=0; i<pmids.length; i+=batchSize) {
+    const batch = pmids.slice(i,i+batchSize);
     try {
-      const query = batch.map(id=>`EXT_ID:${id}`).join(' OR ');
-      const data = await fetch(
-        `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(query)}&resultType=core&format=json&pageSize=100`
-      ).then(r=>r.json());
-      (data.resultList?.result||[]).forEach(paper => {
-        if (paper.pmid && paper.citedByCount > 0) {
-          result[paper.pmid] = paper.citedByCount;
-        }
-      });
-    } catch(e) { console.warn('EuropePMC 오류:', e); }
-    if (i+batchSize < pmids.length) await new Promise(r=>setTimeout(r,200));
+      const q = batch.map(id=>`EXT_ID:${id}`).join(' OR ');
+      const data = await fetch(`https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(q)}&resultType=core&format=json&pageSize=100`).then(r=>r.json());
+      (data.resultList?.result||[]).forEach(p => { if (p.pmid && p.citedByCount>0) result[p.pmid]=p.citedByCount; });
+    } catch(e) {}
+    if (i+batchSize<pmids.length) await new Promise(r=>setTimeout(r,200));
   }
   return result;
 }
@@ -320,16 +342,10 @@ async function fetchEuropePMC(pmids) {
 async function fetchCrossRef(dois) {
   const result = {};
   if (!dois.length) return result;
-  // CrossRef는 DOI별 개별 조회
-  const batch = dois.slice(0, 30); // 최대 30개
-  await Promise.allSettled(batch.map(async doi => {
+  await Promise.allSettled(dois.slice(0,30).map(async doi => {
     try {
-      const data = await fetch(
-        `https://api.crossref.org/works/${encodeURIComponent(doi)}?select=is-referenced-by-count`
-      ).then(r=>r.ok?r.json():null);
-      if (data?.message?.['is-referenced-by-count'] > 0) {
-        result[doi] = data.message['is-referenced-by-count'];
-      }
+      const data = await fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}?select=is-referenced-by-count`).then(r=>r.ok?r.json():null);
+      if (data?.message?.['is-referenced-by-count']>0) result[doi]=data.message['is-referenced-by-count'];
     } catch(e) {}
   }));
   return result;
@@ -339,17 +355,64 @@ async function fetchCrossRef(dois) {
 async function fetchOpenCitations(pmids) {
   const result = {};
   if (!pmids.length) return result;
-  const batch = pmids.slice(0, 20);
-  await Promise.allSettled(batch.map(async pmid => {
+  await Promise.allSettled(pmids.slice(0,20).map(async pmid => {
     try {
-      const data = await fetch(
-        `https://opencitations.net/index/api/v2/citation-count/pmid:${pmid}`
-      ).then(r=>r.ok?r.json():null);
+      const data = await fetch(`https://opencitations.net/index/api/v2/citation-count/pmid:${pmid}`).then(r=>r.ok?r.json():null);
       const count = data?.[0]?.count;
-      if (count && parseInt(count) > 0) result[pmid] = parseInt(count);
+      if (count && parseInt(count)>0) result[pmid]=parseInt(count);
     } catch(e) {}
   }));
   return result;
+}
+
+// ── 심평원 병원 정보 ──────────────────────────────────
+async function fetchHiraHospitals(doctors, deptCode) {
+  const hospitalMap = {};
+  if (!HIRA_API_KEY || HIRA_API_KEY === 'YOUR_HIRA_API_KEY_HERE') return hospitalMap;
+
+  // 의사 소속 병원명 목록 추출
+  const hospitalNames = [...new Set(Object.values(doctors).map(d=>d.affil).filter(Boolean))];
+
+  for (const hospitalKr of hospitalNames) {
+    try {
+      // 병원 기본 목록으로 병원 검색
+      const url = `https://apis.data.go.kr/B551182/hospInfoServicev2/getHospBasisList?serviceKey=${HIRA_API_KEY}&pageNo=1&numOfRows=5&yadmNm=${encodeURIComponent(hospitalKr)}&type=json`;
+      const data = await fetch(url).then(r=>r.json());
+      const items = data.response?.body?.items?.item;
+      if (!items) continue;
+
+      const item = Array.isArray(items) ? items[0] : items;
+      if (!item?.ykiho) continue;
+
+      // 전문과목별 전문의 수 조회
+      const detailUrl = `https://apis.data.go.kr/B551182/MdlrtHospInfoService2/getDtlList2?serviceKey=${HIRA_API_KEY}&ykiho=${item.ykiho}&type=json`;
+      const detail = await fetch(detailUrl).then(r=>r.json());
+      const detailItems = detail.response?.body?.items?.item;
+      if (!detailItems) continue;
+
+      const details = Array.isArray(detailItems) ? detailItems : [detailItems];
+
+      // 해당 진료과 전문의 수
+      let specialistCount = 0;
+      if (deptCode) {
+        const dept = details.find(d=>d.dgsbjtCd===deptCode);
+        specialistCount = dept ? parseInt(dept.doctorCnt||0) : 0;
+      }
+
+      // 전체 전문의 수
+      const totalDoctors = details.reduce((sum,d)=>sum+parseInt(d.doctorCnt||0),0);
+
+      hospitalMap[hospitalKr] = {
+        name: hospitalKr,
+        addr: item.addr||'',
+        tel: item.telno||'',
+        totalDoctors,
+        specialistCount,
+        hospType: item.clCdNm||'',
+      };
+    } catch(e) { console.warn('심평원 오류:', hospitalKr, e); }
+  }
+  return hospitalMap;
 }
 
 // ── 랭킹 ─────────────────────────────────────────────
@@ -357,15 +420,17 @@ function rankDoctors(map) {
   const list = Object.values(map);
   list.forEach(d => d.papers.sort((a,b)=>b.year-a.year));
   return list.sort((a,b) => {
-    if (b.citationCount !== a.citationCount) return b.citationCount - a.citationCount;
-    if (b.paperCount !== a.paperCount) return b.paperCount - a.paperCount;
-    return b.recentScore - a.recentScore;
+    if (b.citationCount!==a.citationCount) return b.citationCount-a.citationCount;
+    if (b.paperCount!==a.paperCount) return b.paperCount-a.paperCount;
+    return b.recentScore-a.recentScore;
   }).slice(0,15);
 }
 
 // ── 렌더 ─────────────────────────────────────────────
-function renderResults(doctors, raw, sources) {
+function renderResults(doctors, raw, hospitalInfoMap) {
   const section = document.getElementById('resultsSection');
+  const hasHira = Object.keys(hospitalInfoMap).length > 0;
+
   let html = `
     <div class="results-header">
       <div class="results-title">"${raw}" 연구 의사</div>
@@ -373,9 +438,10 @@ function renderResults(doctors, raw, sources) {
     </div>
     <div class="source-badges">
       <span class="source-badge active">PubMed</span>
-      <span class="source-badge ${sources.epmc?'active':''}">Europe PMC</span>
-      <span class="source-badge ${sources.crossref?'active':''}">CrossRef</span>
-      <span class="source-badge ${sources.opencitations?'active':''}">OpenCitations</span>
+      <span class="source-badge active">Europe PMC</span>
+      <span class="source-badge active">CrossRef</span>
+      <span class="source-badge active">OpenCitations</span>
+      <span class="source-badge ${hasHira?'active':''}">심평원</span>
     </div>
     <div class="note-box">아래 수치는 공개된 논문 데이터 기반입니다. 진료 실력이나 수술 성공률과 직접적인 관계가 없으며, 의사 선택의 참고 자료로만 활용하세요.</div>
   `;
@@ -383,6 +449,36 @@ function renderResults(doctors, raw, sources) {
   doctors.forEach((d,i) => {
     const papers = d.papers.slice(0,5);
     const recentYear = d.papers[0]?.year||'-';
+    const hospitalInfo = hospitalInfoMap[d.affil];
+
+    let hospitalBox = '';
+    if (hospitalInfo) {
+      hospitalBox = `
+        <div class="hospital-box">
+          <div class="hospital-box-title">병원 정보 (심평원)</div>
+          <div class="hospital-stats">
+            <div class="hospital-stat">
+              <span class="hospital-stat-val">${hospitalInfo.hospType||'-'}</span>
+              <span class="hospital-stat-lbl">병원 종류</span>
+            </div>
+            <div class="hospital-stat">
+              <span class="hospital-stat-val">${hospitalInfo.totalDoctors>0?hospitalInfo.totalDoctors+'명':'-'}</span>
+              <span class="hospital-stat-lbl">전체 전문의</span>
+            </div>
+            ${hospitalInfo.specialistCount>0?`
+            <div class="hospital-stat">
+              <span class="hospital-stat-val">${hospitalInfo.specialistCount}명</span>
+              <span class="hospital-stat-lbl">관련과 전문의</span>
+            </div>`:''} 
+            ${hospitalInfo.tel?`
+            <div class="hospital-stat">
+              <span class="hospital-stat-val" style="font-size:11px">${hospitalInfo.tel}</span>
+              <span class="hospital-stat-lbl">전화번호</span>
+            </div>`:''}
+          </div>
+        </div>`;
+    }
+
     html += `
       <div class="doctor-card" style="animation-delay:${i*0.05}s">
         <div class="rank-badge ${i<3?'top':''}">${i+1}</div>
@@ -393,36 +489,27 @@ function renderResults(doctors, raw, sources) {
           </div>
           <div class="stat-grid">
             <div class="stat-card">
-              <div class="stat-card-val">${d.citationCount > 0 ? d.citationCount.toLocaleString() : '-'}</div>
-              <div class="stat-card-lbl">
-                피인용수
-                <button class="info-btn">i<span class="tooltip">이 의사의 논문이 다른 연구자들에게<br>인용된 총 횟수입니다.<br>높을수록 연구의 영향력이 큽니다.</span></button>
-              </div>
+              <div class="stat-card-val">${d.citationCount>0?d.citationCount.toLocaleString():'-'}</div>
+              <div class="stat-card-lbl">피인용수<button class="info-btn">i<span class="tooltip">이 의사의 논문이 다른 연구자들에게<br>인용된 총 횟수입니다.<br>높을수록 연구의 영향력이 큽니다.</span></button></div>
             </div>
             <div class="stat-card">
               <div class="stat-card-val">${d.paperCount}</div>
-              <div class="stat-card-lbl">
-                관련 논문 수
-                <button class="info-btn">i<span class="tooltip">이 질환·약물 관련 논문을<br>얼마나 많이 발표했는지입니다.<br>해당 분야의 연구 깊이를 나타냅니다.</span></button>
-              </div>
+              <div class="stat-card-lbl">관련 논문 수<button class="info-btn">i<span class="tooltip">이 질환·약물 관련 논문을<br>얼마나 많이 발표했는지입니다.</span></button></div>
             </div>
             <div class="stat-card">
               <div class="stat-card-val">${recentYear}</div>
-              <div class="stat-card-lbl">
-                최근 논문
-                <button class="info-btn">i<span class="tooltip">가장 최근에 발표한 관련 논문의<br>연도입니다. 현재도 활발히<br>연구 중인지를 나타냅니다.</span></button>
-              </div>
+              <div class="stat-card-lbl">최근 논문<button class="info-btn">i<span class="tooltip">가장 최근 관련 논문 연도입니다.<br>현재도 연구 중인지를 나타냅니다.</span></button></div>
             </div>
           </div>
+          ${hospitalBox}
           <button class="papers-toggle" onclick="togglePapers(this)">논문 목록 보기 ↓</button>
           <div class="papers-list">
             ${papers.map(p=>`
               <div class="paper-item">
                 <a class="paper-title" href="${p.url}" target="_blank">${p.title}</a>
                 <div class="paper-meta">
-                  <span>${p.year}</span>
-                  <span>${p.journal}</span>
-                  ${p.citationCount > 0 ? `<span class="paper-cite">인용 ${p.citationCount}회</span>` : ''}
+                  <span>${p.year}</span><span>${p.journal}</span>
+                  ${p.citationCount>0?`<span class="paper-cite">인용 ${p.citationCount}회</span>`:''}
                 </div>
               </div>`).join('')}
           </div>
