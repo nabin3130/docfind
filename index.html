@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DocFind — 연구하는 의사를 찾다</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #F7F5F0;
+    --surface: #FFFFFF;
+    --text: #1A1A1A;
+    --muted: #6B6B6B;
+    --accent: #1D4ED8;
+    --accent-light: #EEF2FF;
+    --border: #E5E2DA;
+    --success: #059669;
+    --tag-bg: #F0EDE6;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  header {
+    padding: 28px 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .logo {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    color: var(--text);
+    letter-spacing: -0.5px;
+  }
+
+  .logo span { color: var(--accent); }
+
+  .disclaimer {
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--tag-bg);
+    padding: 4px 10px;
+    border-radius: 20px;
+  }
+
+  .hero {
+    max-width: 680px;
+    margin: 80px auto 0;
+    padding: 0 24px;
+    text-align: center;
+  }
+
+  .hero h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 42px;
+    line-height: 1.15;
+    letter-spacing: -1px;
+    margin-bottom: 16px;
+  }
+
+  .hero p {
+    font-size: 15px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin-bottom: 36px;
+  }
+
+  .search-wrap {
+    display: flex;
+    gap: 10px;
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: 14px;
+    padding: 8px 8px 8px 20px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+    transition: border-color 0.2s;
+  }
+
+  .search-wrap:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 4px 24px rgba(29,78,216,0.12);
+  }
+
+  .search-wrap input {
+    flex: 1;
+    border: none;
+    outline: none;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 16px;
+    background: transparent;
+    color: var(--text);
+  }
+
+  .search-wrap input::placeholder { color: #B0ADA6; }
+
+  .search-btn {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 24px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+    white-space: nowrap;
+  }
+
+  .search-btn:hover { background: #1E40AF; }
+  .search-btn:active { transform: scale(0.98); }
+  .search-btn:disabled { background: #9CA3AF; cursor: not-allowed; }
+
+  .suggestions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+
+  .sug-tag {
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--tag-bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .sug-tag:hover {
+    background: var(--accent-light);
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .results-section {
+    max-width: 680px;
+    margin: 48px auto 80px;
+    padding: 0 24px;
+  }
+
+  .results-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+
+  .results-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+  }
+
+  .results-meta {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .loading {
+    text-align: center;
+    padding: 60px 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .spinner {
+    width: 28px;
+    height: 28px;
+    border: 2.5px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    margin: 0 auto 14px;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .error-box {
+    background: #FEF2F2;
+    border: 1px solid #FCA5A5;
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+    color: #DC2626;
+    font-size: 14px;
+  }
+
+  .doctor-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 14px;
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    transition: box-shadow 0.2s, transform 0.15s;
+    animation: fadeUp 0.4s ease both;
+  }
+
+  .doctor-card:hover {
+    box-shadow: 0 8px 32px rgba(0,0,0,0.08);
+    transform: translateY(-2px);
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .rank-badge {
+    min-width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: var(--tag-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'DM Serif Display', serif;
+    font-size: 18px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+
+  .rank-badge.top { background: var(--accent-light); color: var(--accent); }
+
+  .card-body { flex: 1; min-width: 0; }
+
+  .card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .doctor-name {
+    font-family: 'DM Serif Display', serif;
+    font-size: 19px;
+    line-height: 1.2;
+  }
+
+  .match-score {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    flex-shrink: 0;
+  }
+
+  .score-num {
+    font-family: 'DM Serif Display', serif;
+    font-size: 26px;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .score-label {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  .score-bar {
+    width: 80px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 5px;
+    overflow: hidden;
+  }
+
+  .score-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.8s ease;
+  }
+
+  .doctor-affil {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  .card-stats {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .stat-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .stat-val {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .stat-lbl {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .divider {
+    width: 1px;
+    background: var(--border);
+    align-self: stretch;
+    margin: 0 4px;
+  }
+
+  .papers-toggle {
+    font-size: 12px;
+    color: var(--accent);
+    cursor: pointer;
+    margin-top: 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: none;
+    background: none;
+    font-family: 'DM Sans', sans-serif;
+    padding: 0;
+  }
+
+  .papers-toggle:hover { text-decoration: underline; }
+
+  .papers-list {
+    margin-top: 12px;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+    display: none;
+  }
+
+  .papers-list.open { display: block; }
+
+  .paper-item {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--tag-bg);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .paper-item:last-child { border-bottom: none; }
+
+  .paper-title {
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 500;
+  }
+
+  .paper-title:hover { color: var(--accent); }
+
+  .paper-meta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  .no-results {
+    text-align: center;
+    padding: 60px 0;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.8;
+  }
+
+  .note-box {
+    background: var(--accent-light);
+    border: 1px solid #BFDBFE;
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 12px;
+    color: #1E40AF;
+    margin-bottom: 20px;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">doc<span>find</span></div>
+  <span class="disclaimer">연구 활동 기반 정보 제공 · 진료 추천 아님</span>
+</header>
+
+<div class="hero">
+  <h1>연구하는 의사를<br>찾아드립니다</h1>
+  <p>병명 또는 약명을 입력하면 관련 논문을 가장 많이 발표한<br>국내 의사를 연구 활동 지수로 보여드립니다.</p>
+
+  <div class="search-wrap">
+    <input type="text" id="searchInput" placeholder="예: 위암, 췌장암, 글리벡..." autocomplete="off" />
+    <button class="search-btn" id="searchBtn" onclick="doSearch()">검색</button>
+  </div>
+
+  <div class="suggestions">
+    <span class="sug-tag" onclick="quickSearch('위암')">위암</span>
+    <span class="sug-tag" onclick="quickSearch('췌장암')">췌장암</span>
+    <span class="sug-tag" onclick="quickSearch('폐암')">폐암</span>
+    <span class="sug-tag" onclick="quickSearch('간암')">간암</span>
+    <span class="sug-tag" onclick="quickSearch('백혈병')">백혈병</span>
+    <span class="sug-tag" onclick="quickSearch('뇌종양')">뇌종양</span>
+  </div>
+</div>
+
+<div class="results-section" id="resultsSection" style="display:none"></div>
+
+<script>
+const TERM_MAP = {
+  '위암': 'gastric cancer',
+  '췌장암': 'pancreatic cancer',
+  '폐암': 'lung cancer',
+  '간암': 'hepatocellular carcinoma',
+  '백혈병': 'leukemia',
+  '뇌종양': 'brain tumor',
+  '대장암': 'colorectal cancer',
+  '유방암': 'breast cancer',
+  '전립선암': 'prostate cancer',
+  '갑상선암': 'thyroid cancer',
+  '글리벡': 'imatinib',
+  '허셉틴': 'trastuzumab',
+};
+
+function toEnglish(q) {
+  const k = q.trim();
+  return TERM_MAP[k] || k;
+}
+
+function quickSearch(term) {
+  document.getElementById('searchInput').value = term;
+  doSearch();
+}
+
+document.getElementById('searchInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doSearch();
+});
+
+async function doSearch() {
+  const raw = document.getElementById('searchInput').value.trim();
+  if (!raw) return;
+
+  const query = toEnglish(raw);
+  const btn = document.getElementById('searchBtn');
+  const section = document.getElementById('resultsSection');
+
+  btn.disabled = true;
+  btn.textContent = '검색 중...';
+  section.style.display = 'block';
+  section.innerHTML = `<div class="loading"><div class="spinner"></div>PubMed에서 논문 데이터를 불러오는 중...</div>`;
+
+  try {
+    const ids = await fetchPubmedIds(query);
+    if (!ids.length) {
+      section.innerHTML = `<div class="no-results">관련 논문을 찾지 못했습니다.<br>다른 검색어를 시도해보세요.</div>`;
+      return;
+    }
+
+    const papers = await fetchPaperDetails(ids.slice(0, 80));
+    const doctors = aggregateDoctors(papers, query);
+
+    if (!doctors.length) {
+      section.innerHTML = `<div class="no-results">한국 소속 연구자를 찾지 못했습니다.<br>다른 검색어를 시도해보세요.</div>`;
+      return;
+    }
+
+    renderResults(doctors, raw, query);
+  } catch(e) {
+    section.innerHTML = `<div class="error-box">데이터를 불러오는 중 오류가 발생했습니다.<br>잠시 후 다시 시도해주세요.</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '검색';
+  }
+}
+
+async function fetchPubmedIds(query) {
+  const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(query + '[Title/Abstract] AND Korea[Affiliation]')}&retmax=100&sort=relevance&retmode=json`;
+  const res = await fetch(url);
+  const data = await res.json();
+  return data.esearchresult?.idlist || [];
+}
+
+async function fetchPaperDetails(ids) {
+  const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${ids.join(',')}&retmode=json`;
+  const res = await fetch(url);
+  const data = await res.json();
+  const result = data.result || {};
+  return ids.map(id => result[id]).filter(Boolean);
+}
+
+function isKoreanAffil(affil) {
+  if (!affil) return false;
+  const a = affil.toLowerCase();
+  return a.includes('korea') || a.includes('seoul') || a.includes('busan') ||
+    a.includes('daejeon') || a.includes('daegu') || a.includes('incheon') ||
+    a.includes('gwangju') || a.includes('ulsan') || a.includes('suwon') ||
+    a.includes('yonsei') || a.includes('samsung') || a.includes('asan') ||
+    a.includes('severance') || a.includes('snuh') || a.includes('kaist') ||
+    a.includes('postech') || a.includes('catholic') || a.includes('hanyang') ||
+    a.includes('ajou') || a.includes('konkuk') || a.includes('kyung hee') ||
+    a.includes('ewha') || a.includes('sungkyunkwan') || a.includes('chung-ang');
+}
+
+function extractHospital(affil) {
+  if (!affil) return '';
+  const hospitals = [
+    { k: 'Samsung Medical', v: '삼성서울병원' },
+    { k: 'Asan Medical', v: '서울아산병원' },
+    { k: 'Severance', v: '세브란스병원' },
+    { k: 'Seoul National University Hospital', v: '서울대학교병원' },
+    { k: 'SNUH', v: '서울대학교병원' },
+    { k: 'Seoul National University Bundang', v: '분당서울대병원' },
+    { k: 'Yonsei', v: '연세대학교' },
+    { k: 'Catholic University', v: '가톨릭대학교' },
+    { k: 'Hanyang', v: '한양대학교병원' },
+    { k: 'Ajou', v: '아주대학교병원' },
+    { k: 'Sungkyunkwan', v: '성균관대학교' },
+    { k: 'Kyung Hee', v: '경희대학교병원' },
+    { k: 'Ewha', v: '이화여자대학교' },
+    { k: 'Chung-Ang', v: '중앙대학교병원' },
+    { k: 'Konkuk', v: '건국대학교병원' },
+    { k: 'Gachon', v: '가천대길병원' },
+    { k: 'KAIST', v: 'KAIST' },
+    { k: 'Pusan', v: '부산대학교병원' },
+    { k: 'Chonnam', v: '전남대학교병원' },
+  ];
+  for (const h of hospitals) {
+    if (affil.includes(h.k)) return h.v;
+  }
+  const m = affil.match(/([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\s+(?:University|Hospital|Medical|Institute)/);
+  return m ? m[0] : '';
+}
+
+function aggregateDoctors(papers, query) {
+  const map = {};
+
+  papers.forEach(p => {
+    const authors = p.authors || [];
+    const pubYear = parseInt((p.pubdate || '').slice(0, 4)) || 0;
+    const recency = pubYear >= 2022 ? 1.2 : pubYear >= 2018 ? 1.0 : 0.8;
+
+    authors.forEach(a => {
+      if (a.authtype !== 'Author') return;
+      const affil = a.affiliation || '';
+      if (!isKoreanAffil(affil)) return;
+
+      const name = a.name;
+      if (!name || name.length < 3) return;
+
+      if (!map[name]) {
+        map[name] = {
+          name,
+          affil: extractHospital(affil),
+          rawAffil: affil,
+          papers: [],
+          totalCite: 0,
+          recentScore: 0,
+          paperCount: 0,
+        };
+      }
+
+      map[name].papers.push({
+        title: p.title,
+        pmid: p.uid,
+        year: pubYear,
+        journal: p.fulljournalname || p.source || '',
+        authors: authors.map(x => x.name).slice(0, 3).join(', '),
+      });
+      map[name].paperCount++;
+      map[name].recentScore += recency;
+    });
+  });
+
+  const list = Object.values(map).filter(d => d.paperCount >= 1);
+  if (!list.length) return [];
+
+  const maxP = Math.max(...list.map(d => d.paperCount));
+  const maxR = Math.max(...list.map(d => d.recentScore));
+
+  list.forEach(d => {
+    const paperNorm = maxP > 0 ? d.paperCount / maxP : 0;
+    const recencyNorm = maxR > 0 ? d.recentScore / maxR : 0;
+    const raw = paperNorm * 0.5 + recencyNorm * 0.5;
+    d.matchScore = Math.round(40 + raw * 55);
+  });
+
+  return list.sort((a, b) => b.matchScore - a.matchScore).slice(0, 15);
+}
+
+function renderResults(doctors, raw, query) {
+  const section = document.getElementById('resultsSection');
+
+  let html = `
+    <div class="results-header">
+      <div class="results-title">"${raw}" 연구 의사</div>
+      <div class="results-meta">PubMed 기준 · ${doctors.length}명</div>
+    </div>
+    <div class="note-box">
+      매칭률은 논문 수·최근성 기반 연구 활동 지수입니다. 진료 실력이나 수술 성공률과 직접적인 관계가 없으며, 의사 선택의 참고 자료로만 활용하세요.
+    </div>
+  `;
+
+  doctors.forEach((d, i) => {
+    const isTop = i < 3;
+    const papers = d.papers.slice(0, 5);
+
+    html += `
+      <div class="doctor-card" style="animation-delay:${i * 0.05}s">
+        <div class="rank-badge ${isTop ? 'top' : ''}">${i + 1}</div>
+        <div class="card-body">
+          <div class="card-top">
+            <div>
+              <div class="doctor-name">${d.name}</div>
+              <div class="doctor-affil">${d.affil || '소속 미상'}</div>
+            </div>
+            <div class="match-score">
+              <div class="score-num">${d.matchScore}%</div>
+              <div class="score-label">매칭률</div>
+              <div class="score-bar"><div class="score-bar-fill" style="width:${d.matchScore}%"></div></div>
+            </div>
+          </div>
+          <div class="card-stats">
+            <div class="stat-item">
+              <span class="stat-val">${d.paperCount}</span>
+              <span class="stat-lbl">관련 논문</span>
+            </div>
+            <div class="divider"></div>
+            <div class="stat-item">
+              <span class="stat-val">${d.papers[0]?.year || '-'}</span>
+              <span class="stat-lbl">최근 논문</span>
+            </div>
+          </div>
+          <button class="papers-toggle" onclick="togglePapers(this)">
+            논문 목록 보기 ↓
+          </button>
+          <div class="papers-list">
+            ${papers.map(p => `
+              <div class="paper-item">
+                <a class="paper-title" href="https://pubmed.ncbi.nlm.nih.gov/${p.pmid}/" target="_blank">${p.title}</a>
+                <div class="paper-meta">${p.year} · ${p.journal}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  });
+
+  section.innerHTML = html;
+}
+
+function togglePapers(btn) {
+  const list = btn.nextElementSibling;
+  const open = list.classList.toggle('open');
+  btn.textContent = open ? '논문 목록 닫기 ↑' : '논문 목록 보기 ↓';
+}
+</script>
+</body>
+</html>
