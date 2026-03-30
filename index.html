@@ -69,7 +69,7 @@
   .stat-card-val { font-size: 20px; font-weight: 500; color: var(--text); line-height: 1.2; }
   .stat-card-lbl { font-size: 11px; color: var(--muted); margin-top: 2px; display: flex; align-items: center; gap: 4px; }
 
-  .hospital-box { margin-top: 12px; background: var(--tag-bg); border-radius: 10px; padding: 12px 14px; font-size: 12px; }
+  .hospital-box { margin-top: 12px; background: var(--tag-bg); border-radius: 10px; padding: 12px 14px; }
   .hospital-box-title { font-weight: 500; font-size: 12px; color: var(--text); margin-bottom: 6px; }
   .hospital-stats { display: flex; gap: 16px; flex-wrap: wrap; }
   .hospital-stat { display: flex; flex-direction: column; gap: 1px; }
@@ -120,8 +120,7 @@
 <div class="results-section" id="resultsSection" style="display:none"></div>
 
 <script>
-// ── 심평원 API 키 (여기에 넣어줘) ──────────────────────
-const HIRA_API_KEY = '2f2c91e04655e2a16e477d957b7ef39972eb6d2e3d72ccb0bf6f7742a8edf044';
+const HIRA_PROXY = 'https://hira-proxy.kimnabin01.workers.dev';
 
 const TERM_MAP = {
   '위암':'gastric cancer','췌장암':'pancreatic cancer','폐암':'lung cancer',
@@ -132,16 +131,11 @@ const TERM_MAP = {
   '신장암':'renal cell carcinoma','자궁경부암':'cervical cancer','난소암':'ovarian cancer',
 };
 
-// 병명 → 심평원 진료과목 코드 매핑
 const DEPT_MAP = {
-  '위암':'03','췌장암':'03','간암':'03','대장암':'03','식도암':'03', // 외과
-  '폐암':'10', // 흉부외과
-  '백혈병':'15','뇌종양':'11', // 혈액종양내과, 신경외과
-  '유방암':'21', // 유방외과
-  '전립선암':'22', // 비뇨의학과
-  '갑상선암':'03',
-  '난소암':'18','자궁경부암':'18', // 산부인과
-  '담낭암':'03','방광암':'22','신장암':'22',
+  '위암':'03','췌장암':'03','간암':'03','대장암':'03','식도암':'03','담낭암':'03',
+  '폐암':'10','백혈병':'15','뇌종양':'11','유방암':'21',
+  '전립선암':'22','방광암':'22','신장암':'22',
+  '갑상선암':'03','난소암':'18','자궁경부암':'18',
 };
 
 const KR_KEYWORDS = [
@@ -184,22 +178,6 @@ const HOSPITAL_MAP = [
   ['Keimyung','계명대학교병원'],['Yeungnam','영남대학교병원'],
   ['Dankook','단국대학교병원'],['KAIST','KAIST'],['POSTECH','POSTECH'],
 ];
-
-// 심평원 병원명 → 영문 병원명 역매핑
-const HOSPITAL_REVERSE = {
-  '삼성서울병원':'Samsung Medical',
-  '서울아산병원':'Asan Medical',
-  '세브란스병원':'Severance',
-  '분당서울대병원':'Seoul National University Bundang',
-  '서울대학교병원':'Seoul National University Hospital',
-  '국립암센터':'National Cancer Center',
-  '연세대학교':'Yonsei',
-  '고려대학교':'Korea University',
-  '한양대학교병원':'Hanyang',
-  '아주대학교병원':'Ajou',
-  '가천대길병원':'Gachon',
-  '인하대학교병원':'Inha',
-};
 
 function extractHospital(s) {
   if (!s) return '';
@@ -262,10 +240,9 @@ async function doSearch() {
       });
     }
 
-    // 심평원 병원 정보
-    setStep('병원 정보 확인 중...');
+    setStep('병원 정보 확인 중 (심평원)...');
     const deptCode = DEPT_MAP[raw] || '';
-    const hospitalInfoMap = await fetchHiraHospitals(doctors, deptCode);
+    const hospitalInfoMap = await fetchHiraViaProxy(doctors, deptCode);
 
     const ranked = rankDoctors(doctors);
     renderResults(ranked, raw, hospitalInfoMap);
@@ -310,7 +287,7 @@ async function fetchPubmed(query) {
 
       const name = `${lastName} ${foreName}`.trim();
       const hospitalKr = extractHospital(affil);
-      if (!map[name]) map[name] = { name, affil: hospitalKr, affilRaw: affil, papers:[], paperCount:0, recentScore:0, citationCount:0 };
+      if (!map[name]) map[name] = { name, affil: hospitalKr, papers:[], paperCount:0, recentScore:0, citationCount:0 };
       if (!map[name].papers.find(p=>p.pmid===pmid)) {
         map[name].papers.push({ title, pmid, doi, year, journal, url:`https://pubmed.ncbi.nlm.nih.gov/${pmid}/`, citationCount:0 });
         map[name].paperCount++;
@@ -365,52 +342,44 @@ async function fetchOpenCitations(pmids) {
   return result;
 }
 
-// ── 심평원 병원 정보 ──────────────────────────────────
-async function fetchHiraHospitals(doctors, deptCode) {
+// ── 심평원 (Cloudflare Worker 프록시) ─────────────────
+async function fetchHiraViaProxy(doctors, deptCode) {
   const hospitalMap = {};
-  if (!HIRA_API_KEY || HIRA_API_KEY === 'YOUR_HIRA_API_KEY_HERE') return hospitalMap;
-
-  // 의사 소속 병원명 목록 추출
   const hospitalNames = [...new Set(Object.values(doctors).map(d=>d.affil).filter(Boolean))];
 
   for (const hospitalKr of hospitalNames) {
     try {
-      // 병원 기본 목록으로 병원 검색
-      const url = `https://apis.data.go.kr/B551182/hospInfoServicev2/getHospBasisList?serviceKey=${HIRA_API_KEY}&pageNo=1&numOfRows=5&yadmNm=${encodeURIComponent(hospitalKr)}&type=json`;
-      const data = await fetch(url).then(r=>r.json());
-      const items = data.response?.body?.items?.item;
+      // 병원 검색
+      const searchRes = await fetch(`${HIRA_PROXY}?name=${encodeURIComponent(hospitalKr)}`);
+      const searchData = await searchRes.json();
+      const items = searchData.response?.body?.items?.item;
       if (!items) continue;
 
       const item = Array.isArray(items) ? items[0] : items;
       if (!item?.ykiho) continue;
 
-      // 전문과목별 전문의 수 조회
-      const detailUrl = `https://apis.data.go.kr/B551182/MdlrtHospInfoService2/getDtlList2?serviceKey=${HIRA_API_KEY}&ykiho=${item.ykiho}&type=json`;
-      const detail = await fetch(detailUrl).then(r=>r.json());
-      const detailItems = detail.response?.body?.items?.item;
+      // 전문의 수 조회
+      const detailRes = await fetch(`${HIRA_PROXY}?ykiho=${item.ykiho}`);
+      const detailData = await detailRes.json();
+      const detailItems = detailData.response?.body?.items?.item;
       if (!detailItems) continue;
 
       const details = Array.isArray(detailItems) ? detailItems : [detailItems];
-
-      // 해당 진료과 전문의 수
       let specialistCount = 0;
       if (deptCode) {
         const dept = details.find(d=>d.dgsbjtCd===deptCode);
         specialistCount = dept ? parseInt(dept.doctorCnt||0) : 0;
       }
-
-      // 전체 전문의 수
       const totalDoctors = details.reduce((sum,d)=>sum+parseInt(d.doctorCnt||0),0);
 
       hospitalMap[hospitalKr] = {
-        name: hospitalKr,
-        addr: item.addr||'',
-        tel: item.telno||'',
+        hospType: item.clCdNm||'',
         totalDoctors,
         specialistCount,
-        hospType: item.clCdNm||'',
+        tel: item.telno||'',
+        addr: item.addr||'',
       };
-    } catch(e) { console.warn('심평원 오류:', hospitalKr, e); }
+    } catch(e) { console.warn('심평원 프록시 오류:', hospitalKr, e); }
   }
   return hospitalMap;
 }
@@ -455,7 +424,7 @@ function renderResults(doctors, raw, hospitalInfoMap) {
     if (hospitalInfo) {
       hospitalBox = `
         <div class="hospital-box">
-          <div class="hospital-box-title">병원 정보 (심평원)</div>
+          <div class="hospital-box-title">병원 정보 · 심평원</div>
           <div class="hospital-stats">
             <div class="hospital-stat">
               <span class="hospital-stat-val">${hospitalInfo.hospType||'-'}</span>
@@ -469,7 +438,7 @@ function renderResults(doctors, raw, hospitalInfoMap) {
             <div class="hospital-stat">
               <span class="hospital-stat-val">${hospitalInfo.specialistCount}명</span>
               <span class="hospital-stat-lbl">관련과 전문의</span>
-            </div>`:''} 
+            </div>`:''}
             ${hospitalInfo.tel?`
             <div class="hospital-stat">
               <span class="hospital-stat-val" style="font-size:11px">${hospitalInfo.tel}</span>
