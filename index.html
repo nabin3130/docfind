@@ -63,8 +63,6 @@
   .card-top { margin-bottom: 12px; }
   .doctor-name { font-family: 'DM Serif Display', serif; font-size: 19px; line-height: 1.2; }
   .doctor-affil { font-size: 13px; color: var(--muted); margin-top: 3px; }
-  .src-tags { display: flex; gap: 4px; margin-top: 6px; }
-  .src-tag { font-size: 10px; padding: 2px 7px; border-radius: 8px; background: var(--tag-bg); color: var(--muted); border: 1px solid var(--border); }
 
   .stat-grid { display: flex; gap: 10px; margin-top: 4px; }
   .stat-card { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
@@ -84,8 +82,8 @@
   .paper-item:last-child { border-bottom: none; }
   .paper-title { color: var(--text); text-decoration: none; font-weight: 500; }
   .paper-title:hover { color: var(--accent); }
-  .paper-meta { font-size: 11px; color: var(--muted); margin-top: 3px; display: flex; gap: 8px; align-items: center; }
-  .paper-src { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--tag-bg); color: var(--muted); }
+  .paper-meta { font-size: 11px; color: var(--muted); margin-top: 3px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .paper-cite { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--accent-light); color: var(--accent); }
 </style>
 </head>
 <body>
@@ -176,6 +174,11 @@ function toEnglish(q) { return TERM_MAP[q.trim()] || q.trim(); }
 function quickSearch(t) { document.getElementById('searchInput').value = t; doSearch(); }
 document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key==='Enter') doSearch(); });
 
+function setStep(msg) {
+  document.getElementById('resultsSection').innerHTML =
+    `<div class="loading"><div class="spinner"></div>논문 데이터를 불러오는 중...<div class="loading-step">${msg}</div></div>`;
+}
+
 async function doSearch() {
   const raw = document.getElementById('searchInput').value.trim();
   if (!raw) return;
@@ -185,7 +188,7 @@ async function doSearch() {
 
   btn.disabled = true; btn.textContent = '검색 중...';
   section.style.display = 'block';
-  section.innerHTML = `<div class="loading"><div class="spinner"></div>논문 데이터를 불러오는 중...<div class="loading-step">PubMed에서 한국 의사 검색 중</div></div>`;
+  setStep('PubMed에서 한국 의사 검색 중...');
 
   try {
     // Step 1: PubMed로 한국 의사 + 논문 확보
@@ -196,9 +199,9 @@ async function doSearch() {
       return;
     }
 
-    // Step 2: Semantic Scholar로 피인용수 보강 (의사 이름으로 검색)
-    section.innerHTML = `<div class="loading"><div class="spinner"></div>논문 데이터를 불러오는 중...<div class="loading-step">Semantic Scholar에서 피인용수 확인 중</div></div>`;
-    await enrichWithCitations(doctors, query);
+    // Step 2: OpenCitations으로 PMID별 피인용수 조회
+    setStep('OpenCitations에서 피인용수 확인 중...');
+    await enrichWithOpenCitations(doctors);
 
     const ranked = rankDoctors(doctors);
     renderResults(ranked, raw);
@@ -210,7 +213,7 @@ async function doSearch() {
   }
 }
 
-// ── Step 1: PubMed ────────────────────────────────────
+// ── PubMed ────────────────────────────────────────────
 async function fetchPubmed(query) {
   const map = {};
   const ids = await fetch(
@@ -247,7 +250,7 @@ async function fetchPubmed(query) {
         papers:[], paperCount:0, recentScore:0, citationCount:0
       };
       if (!map[name].papers.find(p=>p.pmid===pmid)) {
-        map[name].papers.push({ title, pmid, year, journal, url:`https://pubmed.ncbi.nlm.nih.gov/${pmid}/` });
+        map[name].papers.push({ title, pmid, year, journal, url:`https://pubmed.ncbi.nlm.nih.gov/${pmid}/`, citationCount:0 });
         map[name].paperCount++;
         map[name].recentScore += year>=2022?1.3:year>=2019?1.1:year>=2016?0.9:0.7;
       }
@@ -256,47 +259,52 @@ async function fetchPubmed(query) {
   return map;
 }
 
-// ── Step 2: Semantic Scholar로 피인용수 보강 ──────────
-async function enrichWithCitations(doctors, query) {
-  // Semantic Scholar에서 쿼리 검색 — 논문별 피인용수 + 저자명 가져오기
-  try {
-    const data = await fetch(
-      `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&fields=title,authors,citationCount,externalIds&limit=100`
-    ).then(r=>r.json());
-
-    const papers = data.data||[];
-    papers.forEach(paper => {
-      const citations = paper.citationCount||0;
-      if (!citations) return;
-      const pmid = paper.externalIds?.PubMed||'';
-
-      // PubMed ID로 매칭
-      if (pmid) {
-        for (const doc of Object.values(doctors)) {
-          const match = doc.papers.find(p=>p.pmid===pmid);
-          if (match) {
-            doc.citationCount += citations;
-            match.citationCount = citations;
-            return;
-          }
-        }
+// ── OpenCitations ─────────────────────────────────────
+async function enrichWithOpenCitations(doctors) {
+  // 모든 unique PMID 수집
+  const pmidMap = {}; // pmid -> [doctor, paperIndex]
+  for (const doc of Object.values(doctors)) {
+    doc.papers.forEach((p, idx) => {
+      if (p.pmid) {
+        if (!pmidMap[p.pmid]) pmidMap[p.pmid] = [];
+        pmidMap[p.pmid].push({ doc, idx });
       }
+    });
+  }
 
-      // 저자 이름으로 매칭
-      (paper.authors||[]).forEach(a => {
-        const sName = a.name||'';
-        // 성만 추출해서 비교 (Last name 기준)
-        const sLast = sName.split(' ').pop()?.toLowerCase()||'';
-        for (const [dName, doc] of Object.entries(doctors)) {
-          const dLast = dName.split(' ')[0]?.toLowerCase()||'';
-          if (sLast === dLast && citations > 0) {
+  const pmids = Object.keys(pmidMap);
+  if (!pmids.length) return;
+
+  // OpenCitations COCI API - 배치로 조회 (최대 20개씩)
+  const batchSize = 20;
+  for (let i = 0; i < pmids.length; i += batchSize) {
+    const batch = pmids.slice(i, i + batchSize);
+    try {
+      // OpenCitations에서 PMID로 피인용수 조회
+      const results = await Promise.allSettled(
+        batch.map(pmid =>
+          fetch(`https://opencitations.net/index/coci/api/v1/citations/10.ncbi/${pmid}`)
+            .then(r => r.ok ? r.json() : [])
+            .catch(() => [])
+        )
+      );
+
+      results.forEach((result, j) => {
+        const pmid = batch[j];
+        const citations = result.status === 'fulfilled' ? (result.value?.length || 0) : 0;
+        if (citations > 0 && pmidMap[pmid]) {
+          pmidMap[pmid].forEach(({ doc, idx }) => {
+            doc.papers[idx].citationCount = citations;
             doc.citationCount += citations;
-          }
+          });
         }
       });
-    });
-  } catch(e) {
-    console.warn('Semantic Scholar 피인용수 로딩 실패:', e);
+
+      // rate limit 방지
+      if (i + batchSize < pmids.length) await new Promise(r => setTimeout(r, 300));
+    } catch(e) {
+      console.warn('OpenCitations 오류:', e);
+    }
   }
 }
 
@@ -321,7 +329,7 @@ function renderResults(doctors, raw) {
     </div>
     <div class="source-badges">
       <span class="source-badge active">PubMed</span>
-      <span class="source-badge active">Semantic Scholar</span>
+      <span class="source-badge active">OpenCitations</span>
     </div>
     <div class="note-box">아래 수치는 공개된 논문 데이터 기반입니다. 진료 실력이나 수술 성공률과 직접적인 관계가 없으며, 의사 선택의 참고 자료로만 활용하세요.</div>
   `;
@@ -368,7 +376,7 @@ function renderResults(doctors, raw) {
                 <div class="paper-meta">
                   <span>${p.year}</span>
                   <span>${p.journal}</span>
-                  ${p.citationCount ? `<span class="paper-src">인용 ${p.citationCount}회</span>` : ''}
+                  ${p.citationCount > 0 ? `<span class="paper-cite">인용 ${p.citationCount}회</span>` : ''}
                 </div>
               </div>`).join('')}
           </div>
