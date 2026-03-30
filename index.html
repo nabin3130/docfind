@@ -39,7 +39,7 @@
   .results-title { font-family: 'DM Serif Display', serif; font-size: 22px; }
   .results-meta { font-size: 12px; color: var(--muted); }
 
-  .source-badges { display: flex; gap: 6px; margin-bottom: 16px; }
+  .source-badges { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
   .source-badge { font-size: 11px; padding: 3px 10px; border-radius: 20px; background: var(--tag-bg); color: var(--muted); border: 1px solid var(--border); }
   .source-badge.active { background: var(--accent-light); color: var(--accent); border-color: #BFDBFE; }
 
@@ -191,20 +191,53 @@ async function doSearch() {
   setStep('PubMed에서 한국 의사 검색 중...');
 
   try {
-    // Step 1: PubMed로 한국 의사 + 논문 확보
+    // Step 1: PubMed
     const doctors = await fetchPubmed(query);
-
     if (!Object.keys(doctors).length) {
       section.innerHTML = `<div class="no-results">한국 소속 연구자를 찾지 못했습니다.<br>다른 검색어를 시도해보세요.</div>`;
       return;
     }
 
-    // Step 2: OpenCitations으로 PMID별 피인용수 조회
-    setStep('OpenCitations에서 피인용수 확인 중...');
-    await enrichWithOpenCitations(doctors);
+    // PMID + DOI 수집
+    const pmids = [], doiMap = {};
+    for (const doc of Object.values(doctors)) {
+      doc.papers.forEach(p => {
+        if (p.pmid) pmids.push(p.pmid);
+        if (p.doi) doiMap[p.doi] = p;
+      });
+    }
+
+    // Step 2: Europe PMC (PMID 기반 피인용수 - 가장 신뢰도 높음)
+    setStep('Europe PMC에서 피인용수 확인 중...');
+    const europePmcCites = await fetchEuropePMC(pmids);
+
+    // Step 3: CrossRef (DOI 기반 피인용수)
+    setStep('CrossRef에서 피인용수 보강 중...');
+    const crossrefCites = await fetchCrossRef(Object.keys(doiMap));
+
+    // Step 4: OpenCitations (추가 보강)
+    setStep('OpenCitations에서 피인용수 보강 중...');
+    const openCites = await fetchOpenCitations(pmids);
+
+    // 피인용수 합산 (소스별 최대값 사용 - 중복 방지)
+    for (const doc of Object.values(doctors)) {
+      doc.papers.forEach(p => {
+        const byEpmc = europePmcCites[p.pmid] || 0;
+        const byCrossref = p.doi ? (crossrefCites[p.doi] || 0) : 0;
+        const byOpen = openCites[p.pmid] || 0;
+        // 가장 높은 값 사용 (각 소스가 다른 논문을 커버할 수 있음)
+        p.citationCount = Math.max(byEpmc, byCrossref, byOpen);
+        doc.citationCount += p.citationCount;
+      });
+    }
 
     const ranked = rankDoctors(doctors);
-    renderResults(ranked, raw);
+    const sources = {
+      epmc: Object.keys(europePmcCites).length > 0,
+      crossref: Object.keys(crossrefCites).length > 0,
+      opencitations: Object.keys(openCites).length > 0,
+    };
+    renderResults(ranked, raw, sources);
   } catch(e) {
     console.error(e);
     section.innerHTML = `<div class="error-box">데이터를 불러오는 중 오류가 발생했습니다.<br>잠시 후 다시 시도해주세요.</div>`;
@@ -219,7 +252,6 @@ async function fetchPubmed(query) {
   const ids = await fetch(
     `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(query+'[Title/Abstract] AND Korea[Affiliation]')}&retmax=80&sort=relevance&retmode=json`
   ).then(r=>r.json()).then(d=>d.esearchresult?.idlist||[]);
-
   if (!ids.length) return map;
 
   const xmlText = await fetch(
@@ -233,24 +265,25 @@ async function fetchPubmed(query) {
     const yearEl = article.querySelector('PubDate Year')||article.querySelector('PubDate MedlineDate');
     const year = parseInt(yearEl?.textContent?.slice(0,4)||'0');
     const journal = article.querySelector('Journal Title')?.textContent||article.querySelector('ISOAbbreviation')?.textContent||'';
+    // DOI 추출
+    let doi = '';
+    article.querySelectorAll('ArticleId').forEach(id => {
+      if (id.getAttribute('IdType') === 'doi') doi = id.textContent;
+    });
     const allAffils = [...article.querySelectorAll('AffiliationInfo Affiliation')].map(a=>a.textContent);
 
     article.querySelectorAll('Author').forEach(author => {
       const lastName = author.querySelector('LastName')?.textContent||'';
       const foreName = author.querySelector('ForeName')?.textContent||'';
       if (!lastName) return;
-
       let affil = author.querySelector('AffiliationInfo Affiliation')?.textContent||'';
       if (!isKorean(affil)) affil = allAffils.find(a=>isKorean(a))||'';
       if (!isKorean(affil)) return;
 
       const name = `${lastName} ${foreName}`.trim();
-      if (!map[name]) map[name] = {
-        name, affil: extractHospital(affil),
-        papers:[], paperCount:0, recentScore:0, citationCount:0
-      };
+      if (!map[name]) map[name] = { name, affil: extractHospital(affil), papers:[], paperCount:0, recentScore:0, citationCount:0 };
       if (!map[name].papers.find(p=>p.pmid===pmid)) {
-        map[name].papers.push({ title, pmid, year, journal, url:`https://pubmed.ncbi.nlm.nih.gov/${pmid}/`, citationCount:0 });
+        map[name].papers.push({ title, pmid, doi, year, journal, url:`https://pubmed.ncbi.nlm.nih.gov/${pmid}/`, citationCount:0 });
         map[name].paperCount++;
         map[name].recentScore += year>=2022?1.3:year>=2019?1.1:year>=2016?0.9:0.7;
       }
@@ -259,53 +292,64 @@ async function fetchPubmed(query) {
   return map;
 }
 
-// ── OpenCitations ─────────────────────────────────────
-async function enrichWithOpenCitations(doctors) {
-  // 모든 unique PMID 수집
-  const pmidMap = {}; // pmid -> [doctor, paperIndex]
-  for (const doc of Object.values(doctors)) {
-    doc.papers.forEach((p, idx) => {
-      if (p.pmid) {
-        if (!pmidMap[p.pmid]) pmidMap[p.pmid] = [];
-        pmidMap[p.pmid].push({ doc, idx });
-      }
-    });
-  }
-
-  const pmids = Object.keys(pmidMap);
-  if (!pmids.length) return;
-
-  // OpenCitations COCI API - 배치로 조회 (최대 20개씩)
+// ── Europe PMC ────────────────────────────────────────
+async function fetchEuropePMC(pmids) {
+  const result = {};
+  if (!pmids.length) return result;
+  // 배치 20개씩
   const batchSize = 20;
   for (let i = 0; i < pmids.length; i += batchSize) {
-    const batch = pmids.slice(i, i + batchSize);
+    const batch = pmids.slice(i, i+batchSize);
     try {
-      // OpenCitations에서 PMID로 피인용수 조회
-      const results = await Promise.allSettled(
-        batch.map(pmid =>
-          fetch(`https://opencitations.net/index/coci/api/v1/citations/10.ncbi/${pmid}`)
-            .then(r => r.ok ? r.json() : [])
-            .catch(() => [])
-        )
-      );
-
-      results.forEach((result, j) => {
-        const pmid = batch[j];
-        const citations = result.status === 'fulfilled' ? (result.value?.length || 0) : 0;
-        if (citations > 0 && pmidMap[pmid]) {
-          pmidMap[pmid].forEach(({ doc, idx }) => {
-            doc.papers[idx].citationCount = citations;
-            doc.citationCount += citations;
-          });
+      const query = batch.map(id=>`EXT_ID:${id}`).join(' OR ');
+      const data = await fetch(
+        `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(query)}&resultType=core&format=json&pageSize=100`
+      ).then(r=>r.json());
+      (data.resultList?.result||[]).forEach(paper => {
+        if (paper.pmid && paper.citedByCount > 0) {
+          result[paper.pmid] = paper.citedByCount;
         }
       });
-
-      // rate limit 방지
-      if (i + batchSize < pmids.length) await new Promise(r => setTimeout(r, 300));
-    } catch(e) {
-      console.warn('OpenCitations 오류:', e);
-    }
+    } catch(e) { console.warn('EuropePMC 오류:', e); }
+    if (i+batchSize < pmids.length) await new Promise(r=>setTimeout(r,200));
   }
+  return result;
+}
+
+// ── CrossRef ──────────────────────────────────────────
+async function fetchCrossRef(dois) {
+  const result = {};
+  if (!dois.length) return result;
+  // CrossRef는 DOI별 개별 조회
+  const batch = dois.slice(0, 30); // 최대 30개
+  await Promise.allSettled(batch.map(async doi => {
+    try {
+      const data = await fetch(
+        `https://api.crossref.org/works/${encodeURIComponent(doi)}?select=is-referenced-by-count`
+      ).then(r=>r.ok?r.json():null);
+      if (data?.message?.['is-referenced-by-count'] > 0) {
+        result[doi] = data.message['is-referenced-by-count'];
+      }
+    } catch(e) {}
+  }));
+  return result;
+}
+
+// ── OpenCitations ─────────────────────────────────────
+async function fetchOpenCitations(pmids) {
+  const result = {};
+  if (!pmids.length) return result;
+  const batch = pmids.slice(0, 20);
+  await Promise.allSettled(batch.map(async pmid => {
+    try {
+      const data = await fetch(
+        `https://opencitations.net/index/api/v2/citation-count/pmid:${pmid}`
+      ).then(r=>r.ok?r.json():null);
+      const count = data?.[0]?.count;
+      if (count && parseInt(count) > 0) result[pmid] = parseInt(count);
+    } catch(e) {}
+  }));
+  return result;
 }
 
 // ── 랭킹 ─────────────────────────────────────────────
@@ -320,7 +364,7 @@ function rankDoctors(map) {
 }
 
 // ── 렌더 ─────────────────────────────────────────────
-function renderResults(doctors, raw) {
+function renderResults(doctors, raw, sources) {
   const section = document.getElementById('resultsSection');
   let html = `
     <div class="results-header">
@@ -329,7 +373,9 @@ function renderResults(doctors, raw) {
     </div>
     <div class="source-badges">
       <span class="source-badge active">PubMed</span>
-      <span class="source-badge active">OpenCitations</span>
+      <span class="source-badge ${sources.epmc?'active':''}">Europe PMC</span>
+      <span class="source-badge ${sources.crossref?'active':''}">CrossRef</span>
+      <span class="source-badge ${sources.opencitations?'active':''}">OpenCitations</span>
     </div>
     <div class="note-box">아래 수치는 공개된 논문 데이터 기반입니다. 진료 실력이나 수술 성공률과 직접적인 관계가 없으며, 의사 선택의 참고 자료로만 활용하세요.</div>
   `;
